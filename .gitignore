@@ -1,0 +1,31 @@
+# Java
+target/
+*.class
+*.jar
+*.war
+*.log
+.mvn/
+
+# Node
+node_modules/
+dist/
+.cache/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.project
+.classpath
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+FixMate-Docker.zip
+rebuild_history.ps1
+setup_git_history.ps1
