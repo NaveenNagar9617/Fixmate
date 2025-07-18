@@ -1,0 +1,172 @@
+services:
+  # ========================
+  # Database - PostgreSQL
+  # ========================
+  postgres:
+    image: postgres:16-alpine
+    container_name: fixmate-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hostel_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-hostel_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - fixmate-network
+
+  # ========================
+  # Cache - Redis
+  # ========================
+  redis:
+    image: redis:7-alpine
+    container_name: fixmate-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fixmate-network
+
+  # ========================
+  # Object Storage - MinIO
+  # ========================
+  minio:
+    image: minio/minio:latest
+    container_name: fixmate-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - fixmate-network
+
+  # ========================
+  # MinIO Bucket Init
+  # ========================
+  minio-init:
+    image: minio/mc:latest
+    container_name: fixmate-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set fixmateminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      mc mb fixmateminio/$${MINIO_BUCKET} --ignore-existing;
+      echo 'Private bucket created successfully!';
+      exit 0;
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-fixmate}
+    networks:
+      - fixmate-network
+
+  # ========================
+  # Backend - Spring Boot
+  # ========================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fixmate-backend
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-b3BlbnNlY3JldGtleWZvcmZpeG1hdGVhcHBsaWNhdGlvbjIwMjZzZWN1cml0eWtleXRoYXRpc2xvbmdlbm91Z2g=}
+      MINIO_URL: http://minio:9000
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://localhost:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-fixmate}
+      MAIL_USERNAME: ${MAIL_USERNAME:-fixmate@example.com}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-changeme}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - fixmate-network
+
+  # ========================
+  # Frontend - React + Vite
+  # ========================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: fixmate-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - fixmate-network
+
+  # ========================
+  # Reverse Proxy - Nginx
+  # ========================
+  nginx:
+    image: nginx:alpine
+    container_name: fixmate-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - fixmate-network
+
+# ========================
+# Persistent Volumes
+# ========================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+
+# ========================
+# Network
+# ========================
+networks:
+  fixmate-network:
+    driver: bridge
